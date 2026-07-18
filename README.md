@@ -1,5 +1,7 @@
 # Claude Code Guardrail Hooks
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![CI](https://github.com/aksheyw/claude-code-guardrail-hooks/actions/workflows/ci.yml/badge.svg)](https://github.com/aksheyw/claude-code-guardrail-hooks/actions/workflows/ci.yml) ![Claude Code hooks](https://img.shields.io/badge/Claude%20Code-hooks-8A2BE2.svg)
+
 > **Four small, self-contained hooks that stop an agent from doing the wrong thing at the exact moment it's about to do it — not by asking nicely in a rule file, but by actually blocking or capturing the tool call.**
 
 Rules in `CLAUDE.md` or a global rules file are instructions. An agent under context pressure can drift away from them mid-session. A hook runs on every matching tool call, every time, regardless of what's in context. These four are the ones I've found earn their keep enough to run on every project, every session.

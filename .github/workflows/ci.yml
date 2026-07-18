@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check (node + bash)
+        run: |
+          set -eu
+          for f in hooks/*.js tests/*.js; do node --check "$f"; done
+          bash -n hooks/secret-scan-postwrite.sh
+      - name: Confirm jq is available (secret-scan tests need it)
+        run: jq --version
+      - name: Run the hook test suite
+        run: node tests/run-tests.js
