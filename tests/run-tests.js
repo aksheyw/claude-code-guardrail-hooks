@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-// Zero-dependency smoke tests for the four hooks. Run with: node tests/run-tests.js
-// Two styles: (1) unit tests against the exported functions (pause-guard, config-protection),
-// (2) integration tests that spawn the script with piped stdin (capture-subagent-output,
-// secret-scan-postwrite.sh), since those have no meaningful exports to unit-test.
+// Zero-dependency tests for the four hooks. Run with: node tests/run-tests.js
+// Two styles: (1) unit tests against exported functions (pause-guard,
+// config-protection), (2) integration tests that spawn the script with piped
+// stdin (capture-subagent-output, secret-scan-postwrite.sh), which have no
+// meaningful exports. Many tests below are regression locks for defects found in
+// the pre-publish adversarial review (see README + the audit findings doc).
 
 const assert = require('assert');
 const path = require('path');
@@ -28,51 +30,129 @@ function test(name, fn) {
   }
 }
 
-// ── pause-guard.js ──────────────────────────────────────────────────────────
-console.log('pause-guard.js');
+// ── pause-guard.js — classify() ─────────────────────────────────────────────
+console.log('pause-guard.js — classify()');
 {
   const { classify } = require(path.join(HOOKS_DIR, 'pause-guard.js'));
   const limits = { effort: 1000, hard: 280 };
+  const c = (m) => classify(m, limits);
 
   test('fires on an explicit effort-adequacy question', () => {
-    assert.strictEqual(classify('is medium good enough for this?', limits), 'effort');
+    assert.strictEqual(c('is medium good enough for this?'), 'effort');
   });
-
   test('fires on "bump you to high"', () => {
-    assert.strictEqual(classify('can you bump you to high for this one', limits), 'effort');
+    assert.strictEqual(c('can you bump you to high for this one'), 'effort');
   });
-
+  test('fires on "change your effort to high"', () => {
+    assert.strictEqual(c('change your effort to high'), 'effort');
+  });
   test('does NOT fire on work-sense "effort" (effort tracker)', () => {
-    assert.strictEqual(classify('update the effort tracker for this sprint', limits), null);
+    assert.strictEqual(c('update the effort tracker for this sprint'), null);
   });
-
   test('does NOT fire on "too much effort to maintain"', () => {
-    assert.strictEqual(classify('this abstraction is too much effort to maintain', limits), null);
+    assert.strictEqual(c('this abstraction is too much effort to maintain'), null);
   });
 
-  test('fires on a bare "stop"', () => {
-    assert.strictEqual(classify('stop.', limits), 'hard');
+  // Regression (finding G): common dev "fast/high/low ... enough" questions must
+  // NOT be read as effort decisions.
+  test('G: does NOT fire on "is this fast enough?"', () => {
+    assert.strictEqual(c('is this fast enough?'), null);
+  });
+  test('G: does NOT fire on "low latency is good enough for now"', () => {
+    assert.strictEqual(c('low latency is good enough for now'), null);
+  });
+  test('G: does NOT fire on "is the high quality setting good enough"', () => {
+    assert.strictEqual(c('is the high quality setting good enough'), null);
+  });
+  test('G: still fires on "is max overkill here"', () => {
+    assert.strictEqual(c('is max overkill here'), 'effort');
   });
 
+  test('fires on a bare "stop"', () => assert.strictEqual(c('stop.'), 'hard'));
   test('does NOT fire on "stop the server"', () => {
-    assert.strictEqual(classify('please stop the server first', limits), null);
+    assert.strictEqual(c('please stop the server first'), null);
   });
-
-  test('fires on "wait"', () => {
-    assert.strictEqual(classify('wait', limits), 'hard');
-  });
-
+  test('fires on "wait"', () => assert.strictEqual(c('wait'), 'hard'));
   test('does NOT fire on "wait for the build"', () => {
-    assert.strictEqual(classify('wait for the build to finish', limits), null);
+    assert.strictEqual(c('wait for the build to finish'), null);
   });
-
   test('negation override wins ("keep going")', () => {
-    assert.strictEqual(classify('stop overthinking this, keep going', limits), null);
+    assert.strictEqual(c('stop overthinking this, keep going'), null);
+  });
+  test('does NOT fire on the pause-guard feature name itself', () => {
+    assert.strictEqual(c('can you explain how the pause-guard hook works'), null);
   });
 
-  test('does NOT fire on the pause-guard feature name itself', () => {
-    assert.strictEqual(classify('can you explain how the pause-guard hook works', limits), null);
+  // Regression (finding H): a NEGATED go-word must not cancel an explicit halt.
+  test('H: "stop; do not continue" stays a hard pause', () => {
+    assert.strictEqual(c('stop; do not continue'), 'hard');
   });
+  test('H: "wait. do not proceed" stays a hard pause', () => {
+    assert.strictEqual(c('wait. do not proceed'), 'hard');
+  });
+  test('H: plain "keep going" is still a go-anyway override', () => {
+    assert.strictEqual(c('keep going'), null);
+  });
+
+  // Regression (finding: hard-pause prose false positives)
+  test('does NOT fire on "I cannot stop thinking about this bug"', () => {
+    assert.strictEqual(c('I cannot stop thinking about this bug'), null);
+  });
+  test('does NOT fire on "stop guessing and read the code"', () => {
+    assert.strictEqual(c('stop guessing and read the code'), null);
+  });
+  test('does NOT fire on "the wait is over"', () => {
+    assert.strictEqual(c('the wait is over'), null);
+  });
+  test('still fires on a real "please stop"', () => {
+    assert.strictEqual(c('please stop'), 'hard');
+  });
+}
+
+// ── pause-guard.js — decide() over a transcript (previously untested layer) ──
+console.log('pause-guard.js — decide() transcript layer');
+{
+  const { decide } = require(path.join(HOOKS_DIR, 'pause-guard.js'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-transcript-'));
+  const writeTx = (lines) => {
+    const p = path.join(tmp, `tx-${Math.random().toString(36).slice(2)}.jsonl`);
+    fs.writeFileSync(p, lines.map((o) => JSON.stringify(o)).join('\n') + '\n');
+    return p;
+  };
+
+  test('blocks when the latest real user message is an effort question', () => {
+    const p = writeTx([
+      { type: 'user', message: { content: 'do the thing' } },
+      { type: 'user', message: { content: 'is medium good enough?' } },
+    ]);
+    assert.strictEqual(decide({ transcript_path: p }).exitCode, 2);
+  });
+  test('allows when the latest user message is ordinary work', () => {
+    const p = writeTx([{ type: 'user', message: { content: 'add a login page' } }]);
+    assert.strictEqual(decide({ transcript_path: p }).exitCode, 0);
+  });
+  test('skips an isMeta (slash-command) entry to find the real message', () => {
+    const p = writeTx([
+      { type: 'user', message: { content: 'is medium good enough?' } },
+      { type: 'user', isMeta: true, message: { content: '/some-command expansion' } },
+    ]);
+    assert.strictEqual(decide({ transcript_path: p }).exitCode, 2);
+  });
+  test('skips a tool_result echo to find the real typed message', () => {
+    const p = writeTx([
+      { type: 'user', message: { content: 'is medium good enough?' } },
+      { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+    ]);
+    assert.strictEqual(decide({ transcript_path: p }).exitCode, 2);
+  });
+  test('fails OPEN (allow) when no transcript path is given', () => {
+    assert.strictEqual(decide({}).exitCode, 0);
+  });
+  test('fails OPEN (allow) on a missing transcript file', () => {
+    assert.strictEqual(decide({ transcript_path: path.join(tmp, 'nope.jsonl') }).exitCode, 0);
+  });
+
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 // ── config-protection.js ────────────────────────────────────────────────────
@@ -80,29 +160,75 @@ console.log('config-protection.js');
 {
   const { run } = require(path.join(HOOKS_DIR, 'config-protection.js'));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-protect-'));
+  const call = (fp) => run(JSON.stringify({ tool_input: { file_path: fp } }));
 
   test('blocks editing an EXISTING .eslintrc.js', () => {
     const target = path.join(tmp, '.eslintrc.js');
     fs.writeFileSync(target, 'module.exports = {}');
-    const result = run(JSON.stringify({ tool_input: { file_path: target } }));
-    assert.strictEqual(result.exitCode, 2);
+    assert.strictEqual(call(target).exitCode, 2);
   });
-
   test('allows creating a NEW .eslintrc.js (no existing file)', () => {
-    const target = path.join(tmp, 'fresh', '.eslintrc.js');
-    const result = run(JSON.stringify({ tool_input: { file_path: target } }));
-    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(call(path.join(tmp, 'fresh', '.eslintrc.js')).exitCode, 0);
   });
-
   test('allows editing an unrelated source file', () => {
-    const target = path.join(tmp, 'index.js');
-    const result = run(JSON.stringify({ tool_input: { file_path: target } }));
+    assert.strictEqual(call(path.join(tmp, 'index.js')).exitCode, 0);
+  });
+  test('fails closed on a truncated payload (unit: run() truncated flag)', () => {
+    assert.strictEqual(run('{"tool_input"', { truncated: true }).exitCode, 2);
+  });
+
+  // Regression (agy #6): the unit test above only exercises the run() flag; this
+  // spawns the real process with a >1MB stdin so the stdin data-event truncation
+  // detection that SETS that flag is actually covered.
+  test('fails closed on a real oversized stdin (>1MB blocks, exit 2)', () => {
+    const big = JSON.stringify({ tool_input: { file_path: 'x.js', content: 'a'.repeat(1024 * 1024 + 100) } });
+    let code = 0;
+    try {
+      execFileSync('node', [path.join(HOOKS_DIR, 'config-protection.js')], { input: big, encoding: 'utf8' });
+    } catch (err) {
+      code = err.status;
+    }
+    assert.strictEqual(code, 2);
+  });
+
+  // Regression (finding B): a case-variant name must resolve to the same file on a
+  // case-insensitive FS and still be blocked. On a case-SENSITIVE FS the variant is
+  // a different, non-existent file, so this assertion only holds where the temp FS
+  // is case-insensitive (macOS/Windows default). Guard it so it doesn't false-fail
+  // on Linux CI.
+  test('B: case-variant .ESLintRC.js blocked on case-insensitive FS', () => {
+    const real = path.join(tmp, '.eslintrc.js'); // already created above
+    const variant = path.join(tmp, '.ESLintRC.js');
+    let sameFs = false;
+    try {
+      sameFs = fs.statSync(variant).ino === fs.statSync(real).ino;
+    } catch {
+      sameFs = false; // case-sensitive FS: variant doesn't exist
+    }
+    if (sameFs) {
+      assert.strictEqual(call(variant).exitCode, 2);
+    } else {
+      // case-sensitive FS: a genuinely different file, correctly allowed
+      assert.strictEqual(call(variant).exitCode, 0);
+    }
+  });
+
+  // Regression (finding E): a non-string file_path must not crash to exit 1 (allow).
+  test('E: object file_path does not crash, returns allow', () => {
+    const result = run(JSON.stringify({ tool_input: { file_path: { x: 1 } } }));
     assert.strictEqual(result.exitCode, 0);
   });
 
-  test('fails closed on a truncated payload', () => {
-    const result = run('{"tool_input"', { truncated: true });
-    assert.strictEqual(result.exitCode, 2);
+  // Regression (finding I): real Prettier module/TS config variants are protected.
+  test('I: existing .prettierrc.mjs is blocked', () => {
+    const target = path.join(tmp, '.prettierrc.mjs');
+    fs.writeFileSync(target, 'export default {}');
+    assert.strictEqual(call(target).exitCode, 2);
+  });
+  test('I: existing prettier.config.ts is blocked', () => {
+    const target = path.join(tmp, 'prettier.config.ts');
+    fs.writeFileSync(target, 'export default {}');
+    assert.strictEqual(call(target).exitCode, 2);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -111,62 +237,106 @@ console.log('config-protection.js');
 // ── capture-subagent-output.js (integration) ───────────────────────────────
 console.log('capture-subagent-output.js');
 {
-  function runCapture(payload, homeDir) {
-    return execFileSync('node', [path.join(HOOKS_DIR, 'capture-subagent-output.js')], {
+  const runCapture = (payload, homeDir, env = {}) =>
+    execFileSync('node', [path.join(HOOKS_DIR, 'capture-subagent-output.js')], {
       input: JSON.stringify(payload),
-      env: { ...process.env, HOME: homeDir, CAPTURE_HOOK_DISABLED: '' },
+      env: { ...process.env, HOME: homeDir, CAPTURE_HOOK_DISABLED: '', ...env },
       encoding: 'utf8',
     });
-  }
+  const allFiles = (home) => {
+    const dir = path.join(home, '.claude', 'agent-outputs');
+    const out = [];
+    const walk = (d) => {
+      for (const e of fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }) : []) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else out.push(p);
+      }
+    };
+    walk(dir);
+    return out;
+  };
 
   test('captures a substantial Task output to a file', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
     const longText = 'x'.repeat(900);
     runCapture(
-      {
-        tool_name: 'Task',
-        tool_input: { subagent_type: 'test-agent', description: 'a test run' },
-        tool_response: longText,
-        cwd: '/tmp/some-project',
-      },
+      { tool_name: 'Task', tool_input: { subagent_type: 'test-agent' }, tool_response: longText, cwd: '/tmp/some-project' },
       home
     );
-    const dir = path.join(home, '.claude', 'agent-outputs');
-    assert.ok(fs.existsSync(dir), 'agent-outputs dir should be created');
-    const project = fs.readdirSync(dir)[0];
-    const date = fs.readdirSync(path.join(dir, project))[0];
-    const files = fs.readdirSync(path.join(dir, project, date));
-    assert.ok(files.length === 1, 'exactly one capture file expected');
-    const content = fs.readFileSync(path.join(dir, project, date, files[0]), 'utf8');
-    assert.ok(content.includes(longText), 'captured file should contain the output text');
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    assert.ok(fs.readFileSync(files[0], 'utf8').includes(longText));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  // Regression: the additionalContext reminder must actually be emitted on stdout.
+  // (A scope bug once let the file write succeed but crash before emitting this,
+  // which a file-exists-only assertion missed.)
+  test('emits the capture-discipline reminder on stdout', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const out = runCapture({ tool_name: 'Task', tool_input: { subagent_type: 'x' }, tool_response: 'q'.repeat(900) }, home);
+    assert.ok(out.includes('capture-discipline'), 'stdout should carry the additionalContext reminder');
+    assert.ok(out.includes('auto-saved to'), 'reminder should name the saved file');
     fs.rmSync(home, { recursive: true, force: true });
   });
 
   test('does NOT capture a short output (below MIN_CHARS)', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
     runCapture({ tool_name: 'Task', tool_response: 'too short' }, home);
-    const dir = path.join(home, '.claude', 'agent-outputs');
-    assert.ok(!fs.existsSync(dir), 'no capture dir should exist for short output');
+    assert.strictEqual(allFiles(home).length, 0);
     fs.rmSync(home, { recursive: true, force: true });
   });
 
   test('does NOT capture a non-subagent tool', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
     runCapture({ tool_name: 'Bash', tool_response: 'x'.repeat(900) }, home);
-    const dir = path.join(home, '.claude', 'agent-outputs');
-    assert.ok(!fs.existsSync(dir), 'no capture dir should exist for a non-subagent tool');
+    assert.strictEqual(allFiles(home).length, 0);
     fs.rmSync(home, { recursive: true, force: true });
   });
 
   test('kill switch CAPTURE_HOOK_DISABLED=1 skips capture', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
-    execFileSync('node', [path.join(HOOKS_DIR, 'capture-subagent-output.js')], {
-      input: JSON.stringify({ tool_name: 'Task', tool_response: 'x'.repeat(900) }),
-      env: { ...process.env, HOME: home, CAPTURE_HOOK_DISABLED: '1' },
-      encoding: 'utf8',
-    });
-    const dir = path.join(home, '.claude', 'agent-outputs');
-    assert.ok(!fs.existsSync(dir), 'kill switch should prevent capture');
+    runCapture({ tool_name: 'Task', tool_response: 'x'.repeat(900) }, home, { CAPTURE_HOOK_DISABLED: '1' });
+    assert.strictEqual(allFiles(home).length, 0);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  // Regression (finding: extractText) — the array/content shape the function exists
+  // to handle must be captured, not just a plain string.
+  test('extracts text from a {content:[{type:text,text}]} shape', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const body = 'y'.repeat(900);
+    runCapture({ tool_name: 'Task', tool_response: { content: [{ type: 'text', text: body }] } }, home);
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    assert.ok(fs.readFileSync(files[0], 'utf8').includes(body));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  // Regression (finding K): two same-label captures must not clobber each other.
+  test('K: two captures with the same label do not overwrite (no data loss)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const a = 'A'.repeat(900);
+    const b = 'B'.repeat(900);
+    runCapture({ tool_name: 'Task', tool_input: { subagent_type: 'dup' }, tool_response: a }, home);
+    runCapture({ tool_name: 'Task', tool_input: { subagent_type: 'dup' }, tool_response: b }, home);
+    const bodies = allFiles(home).map((f) => fs.readFileSync(f, 'utf8'));
+    assert.ok(bodies.some((t) => t.includes(a)), 'first capture must survive');
+    assert.ok(bodies.some((t) => t.includes(b)), 'second capture must survive');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  // Regression (finding J): output is size-capped.
+  test('J: an oversized output is truncated with a note', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const huge = 'z'.repeat(3 * 1024 * 1024); // > 2MB cap
+    runCapture({ tool_name: 'Task', tool_response: huge }, home);
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    const content = fs.readFileSync(files[0], 'utf8');
+    assert.ok(content.includes('truncated by capture hook'), 'expected a truncation note');
+    assert.ok(content.length < huge.length, 'expected the file to be smaller than the raw output');
     fs.rmSync(home, { recursive: true, force: true });
   });
 }
@@ -174,38 +344,56 @@ console.log('capture-subagent-output.js');
 // ── secret-scan-postwrite.sh (integration) ─────────────────────────────────
 console.log('secret-scan-postwrite.sh');
 {
-  function runScan(filePath) {
-    return execFileSync('bash', [path.join(HOOKS_DIR, 'secret-scan-postwrite.sh')], {
+  const runScan = (filePath) =>
+    execFileSync('bash', [path.join(HOOKS_DIR, 'secret-scan-postwrite.sh')], {
       input: JSON.stringify({ tool_input: { file_path: filePath } }),
       encoding: 'utf8',
     });
-  }
+  const writeScan = (name, content) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-'));
+    const target = path.join(tmp, name);
+    fs.writeFileSync(target, content);
+    const out = runScan(target);
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return out;
+  };
+  const KEY = 'sk-' + 'a'.repeat(40);
 
   test('flags a hardcoded OpenAI-style key', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-'));
-    const target = path.join(tmp, 'config.js');
-    fs.writeFileSync(target, `const key = "sk-${'a'.repeat(40)}";`);
-    const out = runScan(target);
-    assert.ok(out.includes('SECRET SCAN'), 'expected a secret-scan warning');
-    fs.rmSync(tmp, { recursive: true, force: true });
+    assert.ok(writeScan('config.js', `const key = "${KEY}";`).includes('SECRET SCAN'));
   });
-
   test('stays silent on a clean file', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-'));
-    const target = path.join(tmp, 'index.js');
-    fs.writeFileSync(target, 'const greeting = "hello world";\n');
-    const out = runScan(target);
-    assert.strictEqual(out.trim(), '', 'expected no output for a clean file');
-    fs.rmSync(tmp, { recursive: true, force: true });
+    assert.strictEqual(writeScan('index.js', 'const greeting = "hello world";\n').trim(), '');
   });
 
-  test('does NOT flag a proper env-var reference', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-scan-'));
-    const target = path.join(tmp, 'config.js');
-    fs.writeFileSync(target, 'const apiKey = process.env.OPENAI_API_KEY;\n');
-    const out = runScan(target);
-    assert.strictEqual(out.trim(), '', 'expected no output for an env-var reference');
-    fs.rmSync(tmp, { recursive: true, force: true });
+  // Regression (finding A): a real key behind an env fallback on the SAME line must
+  // still be flagged — this is the non-vacuous replacement for the old test, and it
+  // fails if the env exclusion reverts to line-scoping.
+  test('A: flags a hardcoded key hidden behind an env fallback (|| "sk-...")', () => {
+    const out = writeScan('config.js', `const key = process.env.OPENAI_API_KEY || "${KEY}";\n`);
+    assert.ok(out.includes('SECRET SCAN'), 'the fallback key must be flagged');
+  });
+  test('A: still silent on a pure env-var reference (no false positive)', () => {
+    assert.strictEqual(writeScan('config.js', 'const apiKey = process.env.OPENAI_API_KEY;\n').trim(), '');
+  });
+  test('A: still silent on a generic env assignment (api_key = process.env.X)', () => {
+    assert.strictEqual(writeScan('config.js', 'api_key = process.env.SOMEKEY\n').trim(), '');
+  });
+  test('A: flags a real generic hardcoded secret', () => {
+    assert.ok(writeScan('config.js', 'password = "hunter2hunter2hunter2hunter2"\n').includes('SECRET SCAN'));
+  });
+  // Regression (Codex re-review #1): a real generic secret sharing a line with an
+  // unrelated env reference must NOT be suppressed (the old env filter was line-scoped).
+  test('A: flags a generic secret even when an env ref is elsewhere on the line', () => {
+    const src = 'const password = "hunter2hunter2hunter2hunter2"; const k = process.env.KEY;\n';
+    assert.ok(writeScan('config.js', src).includes('SECRET SCAN'));
+  });
+
+  // Regression: the scanner must NEVER echo the matched secret VALUE into output.
+  test('never echoes the secret value itself into output', () => {
+    const out = writeScan('config.js', `const key = "${KEY}";`);
+    assert.ok(out.includes('SECRET SCAN'), 'sanity: it should have flagged');
+    assert.ok(!out.includes(KEY), 'the raw secret value must not appear in output');
   });
 }
 

@@ -33,16 +33,25 @@ const PROTECTED_FILES = new Set([
   'eslint.config.ts',
   'eslint.config.mts',
   'eslint.config.cts',
-  // Prettier (all config variants including ESM)
+  // Prettier (all config variants including ESM/TS — see prettier.io/docs/configuration)
   '.prettierrc',
   '.prettierrc.js',
   '.prettierrc.cjs',
+  '.prettierrc.mjs',
+  '.prettierrc.ts',
+  '.prettierrc.mts',
+  '.prettierrc.cts',
   '.prettierrc.json',
+  '.prettierrc.json5',
   '.prettierrc.yml',
   '.prettierrc.yaml',
+  '.prettierrc.toml',
   'prettier.config.js',
   'prettier.config.cjs',
   'prettier.config.mjs',
+  'prettier.config.ts',
+  'prettier.config.mts',
+  'prettier.config.cts',
   // Biome
   'biome.json',
   'biome.jsonc',
@@ -55,12 +64,34 @@ const PROTECTED_FILES = new Set([
   // Shell / Style / Markdown
   '.shellcheckrc',
   '.stylelintrc',
+  '.stylelintrc.js',
+  '.stylelintrc.cjs',
+  '.stylelintrc.mjs',
   '.stylelintrc.json',
   '.stylelintrc.yml',
+  '.stylelintrc.yaml',
+  'stylelint.config.js',
+  'stylelint.config.cjs',
+  'stylelint.config.mjs',
   '.markdownlint.json',
+  '.markdownlint.yml',
   '.markdownlint.yaml',
-  '.markdownlintrc'
+  '.markdownlintrc',
+  '.markdownlint-cli2.jsonc',
+  '.markdownlint-cli2.yaml'
 ]);
+
+// Case-folded lookup set. Default macOS (APFS) and Windows (NTFS) filesystems are
+// case-INSENSITIVE, so `.ESLintRC.js` resolves to the same inode as `.eslintrc.js`
+// — a plain case-sensitive Set.has(basename) would let a differently-cased path
+// sail past the guard and overwrite the real config. We compare lowercased names,
+// then still stat the AS-GIVEN path below: on a case-insensitive FS that stat
+// resolves to the real file (so we block); on a case-sensitive FS (Linux) a
+// differently-cased name is a genuinely different, non-existent file (so we allow,
+// correctly). Correct on both filesystem classes.
+const PROTECTED_FILES_LC = new Set(
+  Array.from(PROTECTED_FILES, (name) => name.toLowerCase())
+);
 
 function parseInput(inputOrRaw) {
   if (typeof inputOrRaw === 'string') {
@@ -90,11 +121,16 @@ function run(inputOrRaw, options = {}) {
   }
 
   const input = parseInput(inputOrRaw);
-  const filePath = input?.tool_input?.file_path || input?.tool_input?.file || '';
+  const rawPath = input?.tool_input?.file_path ?? input?.tool_input?.file;
+  // Guard against a non-string file_path (e.g. an object) — path.basename would
+  // throw a TypeError, the process would exit 1 (NOT the blocking exit 2), and the
+  // edit would proceed unguarded. A payload we can't read a path from is not a
+  // recognizable config edit, so allow (exit 0) rather than crash.
+  const filePath = typeof rawPath === 'string' ? rawPath : '';
   if (!filePath) return { exitCode: 0 };
 
   const basename = path.basename(filePath);
-  if (PROTECTED_FILES.has(basename)) {
+  if (PROTECTED_FILES_LC.has(basename.toLowerCase())) {
     // Allow first-time creation — there's no existing config to weaken.
     // The hook's purpose is blocking modifications; writing a brand-new
     // config file in a project that has none is a legitimate bootstrap
@@ -165,5 +201,7 @@ process.stdin.on('end', () => {
     process.exit(2);
   }
 
-  process.stdout.write(raw);
+  // Allow path: exit 0 silently. (The private version echoes `raw` to stdout to
+  // chain into a hook dispatcher; standalone that just re-emits the payload —
+  // including the file content being written — for no benefit, so we don't.)
 });

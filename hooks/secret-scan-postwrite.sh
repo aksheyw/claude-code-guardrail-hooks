@@ -12,6 +12,17 @@
 
 INPUT=$(cat)
 
+# Fail loud, not silent, if jq is missing — a security control must not no-op
+# quietly. This check MUST come before the first jq use below: otherwise jq at the
+# FILE= line produces an empty FILE and the script exits 0 before ever reaching a
+# "jq not found" message, silently disabling the scan. Emit BOTH systemMessage (for
+# a human watching the UI) and hookSpecificOutput.additionalContext (so an
+# unattended/headless agent is told in-context the scanner is off).
+if ! command -v jq >/dev/null 2>&1; then
+  printf '%s\n' '{"systemMessage":"secret-scan hook skipped: jq not found (install jq to enable)","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"⚠️ secret-scan hook is DISABLED: jq is not installed, so written files are not being scanned for hardcoded secrets. Install jq to re-enable."}}'
+  exit 0
+fi
+
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_response.filePath // empty' 2>/dev/null)
 [ -z "$FILE" ] && exit 0
 [ -f "$FILE" ] || exit 0
@@ -27,27 +38,32 @@ esac
 SIZE=$(wc -c < "$FILE" 2>/dev/null || echo 0)
 [ "$SIZE" -gt 524288 ] && exit 0
 
-# Fail loud, not silent, if jq is missing — a security control must not no-op quietly.
-if ! command -v jq >/dev/null 2>&1; then
-  printf '{"systemMessage":"secret-scan hook skipped: jq not found (install jq to enable)"}\n'
-  exit 0
-fi
-
 HITS=""
 # Surface only the LINE NUMBER and the matched PATTERN LABEL — never the secret text itself,
 # so the secret is not echoed into the model context / transcript / session-data.
 add(){ HITS="${HITS}  [$1] line $2 (value redacted)\n"; }
 
+# scan LABEL PATTERN
+# The `--` before "$FILE" stops a filename beginning with `-` being read as a grep
+# option. The while loop stays in the CURRENT shell (process substitution, not a
+# pipe) so `add` actually mutates HITS.
+#
+# NOTE — no env-reference exclusion. An earlier version filtered out lines
+# containing `process.env` / `import.meta.env` / `ENV[...]` etc. to avoid flagging
+# legitimate env usage. That was line-scoped, so it HID a real hardcoded key that
+# shared a line with an env reference — the classic fallback leak
+#   const k = process.env.X || "sk-realkey..."
+# The filter is also unnecessary: every real env-reference syntax contains a `.`,
+# `[`, `{` or `(` that breaks the value character class below, so none of these
+# patterns match legitimate env usage in the first place. Dropping the filter is
+# both simpler and strictly safer (no false negatives from an adjacent env ref).
 scan(){
   local label="$1" pat="$2"
   while IFS= read -r m; do
     [ -z "$m" ] && continue
     local ln="${m%%:*}"
     add "$label" "$ln"
-  # Exclude env-var REFERENCES (the correct pattern) so we flag hardcoded values, not usage.
-  done < <(grep -niEI -e "$pat" "$FILE" 2>/dev/null \
-            | grep -vE 'process\.env|import\.meta\.env|os\.(getenv|environ)|Deno\.env|ENV\[|\$\{?[A-Za-z_]' \
-            | head -3)
+  done < <(grep -niEI -e "$pat" -- "$FILE" 2>/dev/null | head -3)
 }
 
 scan "openrouter-key"  'sk-or-v1-[A-Za-z0-9]{20,}'
@@ -59,11 +75,15 @@ scan "google-api-key"  'AIza[0-9A-Za-z_-]{30,}'
 scan "private-key"     '-----BEGIN [A-Z ]*PRIVATE KEY-----'
 scan "jwt"             'eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]{20,}'
 scan "telegram-token"  '[0-9]{8,12}:[A-Za-z0-9_-]{35,}'
-# quoted assignment OR bare .env-style assignment (KEY=longvalue, no quotes required)
+# GENERIC assignment (KEY="longvalue"). Best-effort and low-confidence by design:
+# the value char class stops at the first `.`/`[`/`{`/`(`, so a generic literal
+# used only as an env FALLBACK (password = process.env.X || "literal") is not
+# caught — the high-confidence prefixed patterns above are what catch real keys in
+# fallback position.
 scan "generic-secret"  '(secret|api[_-]?key|password|access[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'"'`]?[A-Za-z0-9_+/=-]{16,}'
 
 if [ -n "$HITS" ]; then
-  MSG="⚠️ SECRET SCAN: possible hardcoded secret(s) in $(basename "$FILE"). Move to an env var BEFORE any commit/push (see ~/.claude/rules/security.md). If this is a false positive (placeholder/example), note it explicitly:\n\n${HITS}"
+  MSG="⚠️ SECRET SCAN: possible hardcoded secret(s) in $(basename -- "$FILE"). Move to an env var BEFORE any commit/push (see ~/.claude/rules/security.md). If this is a false positive (placeholder/example), note it explicitly:\n\n${HITS}"
   jq -cn --arg ctx "$MSG" '{systemMessage:"⚠️ Possible secret written — see agent context",hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$ctx}}'
 fi
 exit 0

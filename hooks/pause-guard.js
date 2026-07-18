@@ -58,8 +58,12 @@ const DEFAULT_TAIL_BYTES = 1024 * 1024;
 const LEAD = "(?:^|[\\s,;.!?\"'(])";
 
 // ── Explicit go-anyway overrides (checked first; win over any block) ──────────
+// The negative lookbehind on the first pattern stops a NEGATED go-word from
+// reading as a go-anyway: "stop; do not continue" / "wait, don't proceed" must NOT
+// override the halt just because the words "continue"/"proceed" appear inside a
+// prohibition. (V8 supports variable-length lookbehind.)
 const NEGATE = [
-  /\b(?:keep going|carry on|go ahead|proceed|press on|crack on|continue)\b/,
+  /(?<!\b(?:do not|don['’]?t|never|not|no|cannot|can['’]?t|won['’]?t|wont)\s)\b(?:keep going|carry on|go ahead|proceed|press on|crack on|continue)\b/,
   /\b(?:do(?:n['’]?t| not)|no need to|you do(?:n['’]?t| not) need to|don['’]?t bother(?:\s+to)?)\s+(?:change|adjust|switch|touch|raise|lower|reduce|increase|bump|drop|pause|stop|wait|hold)\b/,
   // decision to NOT change the level => proceed at current effort
   /\b(?:keep|leave|stay(?:ing)?)\b[^.?!]{0,18}\b(?:medium|med|high|low|max|maximum|fast|the same|as[-\s]?is|current|where you are)\b/,
@@ -79,9 +83,16 @@ const EFFORT = [
   /\b(?:higher|lower|increase|reduce|raise|bump(?:\s*up)?|drop|dial(?:\s*(?:up|down))?|crank(?:\s*up)?|turn(?:\s*(?:up|down))?|upgrade|downgrade)\s+(?:the\s+|your\s+|its\s+)?(?:reasoning\s+)?effort\b/, // "raise the effort", "bump up effort"
   /\b(?:change|adjust|switch|modify)\b[^.?!]{0,15}\byour\s+(?:reasoning\s+)?effort\b/, // "change your effort" (requires "your")
   /\b(?:should|shall|do|would|can|could|want|need|wanna)\s+(?:i|we|you|u)\b[^.?!]{0,40}\b(?:reasoning\s+)?effort\b/, // "should I change your effort?"
-  // adequacy question around an effort LEVEL name (either order)
-  /\b(?:high|higher|medium|med|low|lower|max|maximum|fast)\b[^.?!]{0,30}\b(?:good enough|enough|sufficient|too (?:much|low|little|high|weak|strong)|overkill|adequate|the right|right (?:level|amount)|cut it|work for)\b/,
-  /\b(?:is|are|isn['’]?t|would|should|will|does|do)\b[^.?!]{0,25}\b(?:high|higher|medium|med|low|lower|max|maximum|fast)\b[^.?!]{0,20}\b(?:enough|good|ok|okay|fine|right|sufficient|overkill)\b/,
+  // adequacy question around an effort LEVEL name (either order). The level words
+  // here are restricted to medium/med/max/maximum — the ones that read as an
+  // effort/model level rather than a plain English adjective. high/higher/low/
+  // lower/fast were REMOVED from these bare-adjacency patterns: they false-fired on
+  // ordinary dev questions ("is this fast enough?", "low latency is good enough",
+  // "is the high quality setting good enough"). Explicit effort phrasing for
+  // high/low still fires via the "your effort" / "effort to high" / "bump you to
+  // high" patterns above and below.
+  /\b(?:medium|med|max|maximum)\b[^.?!]{0,30}\b(?:good enough|enough|sufficient|too (?:much|low|little|high|weak|strong)|overkill|adequate|the right|right (?:level|amount)|cut it|work for)\b/,
+  /\b(?:is|are|isn['’]?t|would|should|will|does|do)\b[^.?!]{0,25}\b(?:medium|med|max|maximum)\b[^.?!]{0,20}\b(?:enough|good|ok|okay|fine|right|sufficient|overkill)\b/,
   // "switch/put/move/bump/drop you to <level>"
   /\b(?:switch|put|move|bump|drop|push|take)\s+(?:me|you|u)\b[^.?!]{0,15}\b(?:to|on|at|up to|down to)\s+(?:high|higher|medium|med|low|lower|max|maximum|fast)\b/,
   // "too low/high effort" (either order) — reasoning-level adjective, not "too much
@@ -106,16 +117,22 @@ function hardPause(lower) {
   }
   // "hold on" / "hold up" — but not "hold on to <something>" (= retain)
   if (/\bhold (?:on|up)\b(?!\s+to\b)/.test(lower)) return true;
-  // standalone "stop" — but not "stop the server / build / process ..."
+  // standalone "stop" — but not "stop the server / build / process ...", not a
+  // can't-stop idiom ("I cannot stop thinking about this bug"), and not "stop
+  // <gerund>" ("stop guessing", "stop being lazy") which is a topic, not a halt.
   if (
     !/\bstop(?:p?ing|p?ed)?\s+(?:the|this|that|it|all|my|your|our|a |an |server|build|process|container|loop|dev|script|job|run|test|service|workflow|deploy|task|recording|sharing|watching|polling)\b/.test(lower) &&
+    !/\b(?:cannot|can['’]?t|could\s?n['’]?t|will\s?not|won['’]?t|would\s?n['’]?t)\s+stop\b/.test(lower) &&
+    !/\bstop\s+\w+ing\b/.test(lower) &&
     new RegExp(LEAD + '(?:just |please )?stop\\b').test(lower)
   ) {
     return true;
   }
-  // standalone "wait" — but not "wait for / until / on ..."
+  // standalone "wait" — but not "wait for / until / on ...", not "the wait" and
+  // not "wait is/was over" (a noun, not a command).
   if (
-    !/\bwait\s+(?:for|until|till|on|while|and see)\b/.test(lower) &&
+    !/\bwait\s+(?:for|until|till|on|while|and see|is|was|will|would|has|had|seems)\b/.test(lower) &&
+    !/\bthe\s+wait\b/.test(lower) &&
     new RegExp(LEAD + 'wait\\b').test(lower)
   ) {
     return true;
@@ -148,8 +165,12 @@ function readTail(path, maxBytes) {
     const len = size - start;
     if (len <= 0) return '';
     const buf = Buffer.allocUnsafe(len);
-    fs.readSync(fd, buf, 0, len, start);
-    return buf.toString('utf8');
+    // Honor the ACTUAL bytes read: allocUnsafe is uninitialized, and if the file
+    // shrinks between fstat and readSync (another process truncating the log), a
+    // full-length toString() would expose uninitialized heap memory. Decode only
+    // what was really read.
+    const bytesRead = fs.readSync(fd, buf, 0, len, start);
+    return buf.toString('utf8', 0, bytesRead);
   } catch {
     return null;
   } finally {
