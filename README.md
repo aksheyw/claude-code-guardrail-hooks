@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![CI](https://github.com/aksheyw/claude-code-guardrail-hooks/actions/workflows/ci.yml/badge.svg)](https://github.com/aksheyw/claude-code-guardrail-hooks/actions/workflows/ci.yml) ![Claude Code hooks](https://img.shields.io/badge/Claude%20Code-hooks-8A2BE2.svg)
 
-> **Four small, self-contained hooks that stop an agent from doing the wrong thing at the exact moment it's about to do it — not by asking nicely in a rule file, but by actually blocking or capturing the tool call.**
+> **Four small, self-contained hooks that stop an agent from doing the wrong thing at the exact moment it's about to do it, not by asking nicely in a rule file, but by actually blocking or capturing the tool call.**
 
 Rules in `CLAUDE.md` or a global rules file are instructions. An agent under context pressure can drift away from them mid-session. A hook runs on every matching tool call, every time, regardless of what's in context. These four are the ones I've found earn their keep enough to run on every project, every session.
 
@@ -19,21 +19,21 @@ Rules in `CLAUDE.md` or a global rules file are instructions. An agent under con
 
 Every one of these fixes a failure I hit more than once:
 
-- **pause-guard** exists because I'd ask "is medium good enough for this?" and the agent would answer *and keep working in the same turn* — the one moment I actually needed it to stop and let me set the level first.
+- **pause-guard** exists because I'd ask "is medium good enough for this?" and the agent would answer *and keep working in the same turn*, which was the one moment I actually needed it to stop and let me set the level first.
 - **config-protection** exists because an agent chasing a green lint run will, left unsupervised, edit `.eslintrc.js` instead of the code that's actually wrong.
 - **secret-scan-postwrite** exists because a hardcoded key written mid-session is easy to miss in a large diff, and a `.gitignore` entry doesn't help if the key already landed in a tracked file.
-- **capture-subagent-output** exists because subagent output is the single biggest thing that gets lost — it arrives, gets summarized into a shorter reply, and the raw text is gone by the time the session ends.
+- **capture-subagent-output** exists because subagent output is the single biggest thing that gets lost. It arrives, gets summarized into a shorter reply, and the raw text is gone by the time the session ends.
 
 ## Design principles (worth reading before you wire these in)
 
-- **Fail open vs. fail closed is a deliberate per-hook choice, not an accident.** `pause-guard` fails OPEN on any internal error — it's a nudge, not a security boundary, and a fail-closed bug there would wedge every tool call of every session. `config-protection` fails CLOSED on a truncated payload — better to over-block a config edit than silently let one through. Read the header comment in each file before changing its error handling.
-- **Never echo the matched SECRET VALUE.** `secret-scan-postwrite.sh` reports only a line number and a pattern label ("openrouter-key", "aws-access-key") — the matched secret text is discarded and never echoed back into the agent's context or the session transcript. (The one thing it does print verbatim is the file's basename, so don't put a secret in a filename.)
-- **Kill switches where they matter.** `pause-guard` (which fires on every tool call) and `capture` (which fires on every subagent call) each have an environment-variable escape hatch — `PAUSE_GUARD_DISABLED=1` and `CAPTURE_HOOK_DISABLED=1` — so a false positive never becomes a recurring annoyance. The two `Write`-scoped hooks (config-protection, secret-scan) are disabled by removing their entry from `settings.json`; they only fire on file writes, so there's no recurring-annoyance case to guard against.
-- **Self-exclusion.** The secret scanner skips its own hook/rule/skill directories — otherwise a file documenting *what a secret pattern looks like* would flag itself every time.
+- **Fail open vs. fail closed is a deliberate per-hook choice, not an accident.** `pause-guard` fails OPEN on any internal error, because it's a nudge, not a security boundary, and a fail-closed bug there would wedge every tool call of every session. `config-protection` fails CLOSED on a truncated payload: better to over-block a config edit than silently let one through. Read the header comment in each file before changing its error handling.
+- **Never echo the matched SECRET VALUE.** `secret-scan-postwrite.sh` reports only a line number and a pattern label ("openrouter-key", "aws-access-key"), and the matched secret text is discarded and never echoed back into the agent's context or the session transcript. (The one thing it does print verbatim is the file's basename, so don't put a secret in a filename.)
+- **Kill switches where they matter.** `pause-guard` (which fires on every tool call) and `capture` (which fires on every subagent call) each have an environment-variable escape hatch (`PAUSE_GUARD_DISABLED=1` and `CAPTURE_HOOK_DISABLED=1`) so a false positive never becomes a recurring annoyance. The two `Write`-scoped hooks (config-protection, secret-scan) are disabled by removing their entry from `settings.json`; they only fire on file writes, so there's no recurring-annoyance case to guard against.
+- **Self-exclusion.** The secret scanner skips its own hook/rule/skill directories, because otherwise a file documenting *what a secret pattern looks like* would flag itself every time.
 
 ## Install
 
-Hooks are plain scripts — there's no plugin manifest here, just copy them somewhere stable and wire them into your `settings.json`.
+Hooks are plain scripts: there's no plugin manifest here, just copy them somewhere stable and wire them into your `settings.json`.
 
 ```bash
 git clone https://github.com/aksheyw/claude-code-guardrail-hooks.git
@@ -41,9 +41,9 @@ mkdir -p ~/.claude/scripts/hooks
 cp claude-code-guardrail-hooks/hooks/*.js claude-code-guardrail-hooks/hooks/*.sh ~/.claude/scripts/hooks/
 ```
 
-Then add the hook entries to `~/.claude/settings.json` (or a project's `.claude/settings.json`). See [`examples/settings-snippet.json`](examples/settings-snippet.json) for the exact shape — merge its `hooks` block into your existing config rather than overwriting it. **Claude Code hook `command` fields need absolute paths** (no `~` expansion), so swap `/absolute/path/to/hooks/...` for wherever you actually copied the files.
+Then add the hook entries to `~/.claude/settings.json` (or a project's `.claude/settings.json`). See [`examples/settings-snippet.json`](examples/settings-snippet.json) for the exact shape, and merge its `hooks` block into your existing config rather than overwriting it. **Claude Code hook `command` fields need absolute paths** (no `~` expansion), so swap `/absolute/path/to/hooks/...` for wherever you actually copied the files.
 
-Take only the hooks you want — they're fully independent; there's no dependency between them.
+Take only the hooks you want: they're fully independent; there's no dependency between them.
 
 ## Verify install worked
 
@@ -51,7 +51,7 @@ Take only the hooks you want — they're fully independent; there's no dependenc
 node tests/run-tests.js
 ```
 
-Should print `TOTAL: 51 passed, 0 failed`. This runs the hooks in the cloned **repo** directly (unit tests for `pause-guard.js` / `config-protection.js`, which export testable functions; integration tests that pipe real JSON payloads at `capture-subagent-output.js` and `secret-scan-postwrite.sh`, which don't) — it confirms the code is sound, not that you've wired the copies in `~/.claude/scripts/hooks/` into `settings.json`.
+Should print `TOTAL: 51 passed, 0 failed`. This runs the hooks in the cloned **repo** directly (unit tests for `pause-guard.js` / `config-protection.js`, which export testable functions; integration tests that pipe real JSON payloads at `capture-subagent-output.js` and `secret-scan-postwrite.sh`, which don't). It confirms the code is sound, not that you've wired the copies in `~/.claude/scripts/hooks/` into `settings.json`.
 
 To confirm a hook is actually wired into a live session: start a fresh Claude Code session, ask something like *"is medium reasoning effort good enough for this task?"*, and the agent should stop and answer in text only, with no tool calls, until you set a level.
 
@@ -68,13 +68,13 @@ To confirm a hook is actually wired into a live session: start a fresh Claude Co
 
 ## What these are NOT
 
-These are guardrails against an agent's own mistakes under normal operation — not a sandbox, and not a defense against adversarial prompt injection actively trying to evade them. Treat them as one useful layer, not the whole defense. Known, deliberate limitations:
+These are guardrails against an agent's own mistakes under normal operation, not a sandbox, and not a defense against adversarial prompt injection actively trying to evade them. Treat them as one useful layer, not the whole defense. Known, deliberate limitations:
 
-- **Write-scoped, so Bash bypasses them.** `config-protection` and `secret-scan-postwrite` only fire on the `Write`/`Edit`/`MultiEdit` tools. A file created via a shell heredoc or `echo` redirect bypasses both; so does deleting a config with `rm` (Bash) and then `Write`-ing a weaker one, since config-protection is stateless and reads that as a new file. Closing this would need a separate PreToolUse Bash-command scanner — out of scope here.
-- **config-protection matches by basename, and doesn't resolve symlinks.** It also only blocks writes to a *known config name* — it won't stop an edit to `.eslintrc.js` made through a differently-named symlink (`alias.js -> .eslintrc.js`), nor stop adding a *new* competing config type (e.g. creating `eslint.config.js` when `.eslintrc.js` already exists). It's a friction-raiser against the common "just weaken the config" reflex, not an airtight lock.
-- **secret-scan skips a few `.claude/` subdirs unconditionally.** It full-file-skips `.claude/rules/`, `.claude/scripts/`, `.claude/skills/`, and `.claude/commands/` so example secret patterns in those files don't self-flag — which also means a *real* secret hardcoded inside one of those paths is never flagged. It's a content-blind skip, not a "unless it looks real" one. (Other `.claude/` files, e.g. `settings.json`, are still scanned.)
-- **Captured subagent output is NOT secret-scanned.** `capture-subagent-output.js` writes via `fs.writeFileSync` from a `Task`/`Agent` hook — a path that never goes through a `Write` tool, so `secret-scan-postwrite.sh` never sees it. A subagent report that legitimately quotes a secret it found gets persisted verbatim under `~/.claude/agent-outputs/`. **Treat `~/.claude/agent-outputs/` as sensitive: keep it out of any repo or backup that isn't itself scanned, and never commit a real captured file** (its header also embeds your local `cwd`/username).
+- **Write-scoped, so Bash bypasses them.** `config-protection` and `secret-scan-postwrite` only fire on the `Write`/`Edit`/`MultiEdit` tools. A file created via a shell heredoc or `echo` redirect bypasses both; so does deleting a config with `rm` (Bash) and then `Write`-ing a weaker one, since config-protection is stateless and reads that as a new file. Closing this would need a separate PreToolUse Bash-command scanner, which is out of scope here.
+- **config-protection matches by basename, and doesn't resolve symlinks.** It also only blocks writes to a *known config name*: it won't stop an edit to `.eslintrc.js` made through a differently-named symlink (`alias.js -> .eslintrc.js`), nor stop adding a *new* competing config type (e.g. creating `eslint.config.js` when `.eslintrc.js` already exists). It's a friction-raiser against the common "just weaken the config" reflex, not an airtight lock.
+- **secret-scan skips a few `.claude/` subdirs unconditionally.** It full-file-skips `.claude/rules/`, `.claude/scripts/`, `.claude/skills/`, and `.claude/commands/` so example secret patterns in those files don't self-flag, which also means a *real* secret hardcoded inside one of those paths is never flagged. It's a content-blind skip, not a "unless it looks real" one. (Other `.claude/` files, e.g. `settings.json`, are still scanned.)
+- **Captured subagent output is NOT secret-scanned.** `capture-subagent-output.js` writes via `fs.writeFileSync` from a `Task`/`Agent` hook, a path that never goes through a `Write` tool, so `secret-scan-postwrite.sh` never sees it. A subagent report that legitimately quotes a secret it found gets persisted verbatim under `~/.claude/agent-outputs/`. **Treat `~/.claude/agent-outputs/` as sensitive: keep it out of any repo or backup that isn't itself scanned, and never commit a real captured file** (its header also embeds your local `cwd`/username).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT (see [LICENSE](LICENSE)).
