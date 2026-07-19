@@ -6,6 +6,8 @@
 
 Rules in `CLAUDE.md` or a global rules file are instructions. An agent under context pressure can drift away from them mid-session. A hook runs on every matching tool call, every time, regardless of what's in context. These four are the ones I've found earn their keep enough to run on every project, every session.
 
+The full story of how these hooks were reviewed and hardened before first publish is in the product case study: [CASE-STUDY.md](CASE-STUDY.md).
+
 ## What's in this repo
 
 | Hook | Event | What it does |
@@ -51,7 +53,7 @@ Take only the hooks you want: they're fully independent; there's no dependency b
 node tests/run-tests.js
 ```
 
-Should print `TOTAL: 51 passed, 0 failed`. This runs the hooks in the cloned **repo** directly (unit tests for `pause-guard.js` / `config-protection.js`, which export testable functions; integration tests that pipe real JSON payloads at `capture-subagent-output.js` and `secret-scan-postwrite.sh`, which don't). It confirms the code is sound, not that you've wired the copies in `~/.claude/scripts/hooks/` into `settings.json`.
+Should print `TOTAL: 53 passed, 0 failed`. This runs the hooks in the cloned **repo** directly (unit tests for `pause-guard.js` / `config-protection.js`, which export testable functions; integration tests that pipe real JSON payloads at `capture-subagent-output.js` and `secret-scan-postwrite.sh`, which don't). It confirms the code is sound, not that you've wired the copies in `~/.claude/scripts/hooks/` into `settings.json`.
 
 To confirm a hook is actually wired into a live session: start a fresh Claude Code session, ask something like *"is medium reasoning effort good enough for this task?"*, and the agent should stop and answer in text only, with no tool calls, until you set a level.
 
