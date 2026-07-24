@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 232" width="960" height="232" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="960" height="232" fill="#FFFFFF"/>
+
+  <text x="40" y="30" font-size="15" font-weight="600" fill="#5B6169">Where each hook fires, and what it can do</text>
+
+  <!-- BEFORE column: PreToolUse, can block -->
+  <rect x="40" y="48" width="272" height="176" rx="10" fill="#F5F6F7" stroke="#B9BEC6" stroke-width="1.5"/>
+  <text x="56" y="72" font-size="12" font-weight="700" fill="#B42318">BEFORE · PreToolUse — CAN BLOCK</text>
+
+  <rect x="52" y="84" width="248" height="64" rx="8" fill="#FDF6F5" stroke="#E8D5D2" stroke-width="1"/>
+  <text x="64" y="104" font-size="13" font-weight="700" fill="#1B2A4A">pause-guard<tspan font-size="11" font-weight="400" fill="#8A8F98">   · every tool</tspan></text>
+  <text x="64" y="122" font-size="12" fill="#5C4A47">Blocks all tool calls when you</text>
+  <text x="64" y="138" font-size="12" fill="#5C4A47">ask it to rethink effort, or stop.</text>
+
+  <rect x="52" y="152" width="248" height="64" rx="8" fill="#FDF6F5" stroke="#E8D5D2" stroke-width="1"/>
+  <text x="64" y="172" font-size="13" font-weight="700" fill="#1B2A4A">config-protection<tspan font-size="11" font-weight="400" fill="#8A8F98">   · Write/Edit</tspan></text>
+  <text x="64" y="190" font-size="12" fill="#5C4A47">Blocks editing an existing lint</text>
+  <text x="64" y="206" font-size="12" fill="#5C4A47">config to dodge a failing check.</text>
+
+  <!-- arrow BEFORE -> tool call -->
+  <path d="M312 136 L342 136" stroke="#8A8F98" stroke-width="2" fill="none"/>
+  <path d="M342 136 l-8 -5 v10 z" fill="#8A8F98"/>
+
+  <!-- the tool call -->
+  <rect x="346" y="108" width="140" height="56" rx="8" fill="#F3F5F9" stroke="#B9BEC6" stroke-width="1"/>
+  <text x="416" y="132" font-size="13" font-weight="600" fill="#1B2A4A" text-anchor="middle">the tool</text>
+  <text x="416" y="150" font-size="13" font-weight="600" fill="#1B2A4A" text-anchor="middle">call runs</text>
+
+  <!-- arrow tool call -> AFTER -->
+  <path d="M486 136 L516 136" stroke="#8A8F98" stroke-width="2" fill="none"/>
+  <path d="M516 136 l-8 -5 v10 z" fill="#8A8F98"/>
+
+  <!-- AFTER column: PostToolUse, observes only -->
+  <rect x="520" y="48" width="400" height="176" rx="10" fill="#F5F6F7" stroke="#B9BEC6" stroke-width="1.5"/>
+  <text x="536" y="72" font-size="12" font-weight="700" fill="#0B6E5F">AFTER · PostToolUse — OBSERVES ONLY</text>
+
+  <rect x="532" y="84" width="376" height="64" rx="8" fill="#E6F4F1" stroke="#0E9384" stroke-width="1"/>
+  <text x="544" y="104" font-size="13" font-weight="700" fill="#1B2A4A">secret-scan<tspan font-size="11" font-weight="400" fill="#8A8F98">   · after a Write</tspan></text>
+  <text x="544" y="122" font-size="12" fill="#0B6E5F">Flags a hardcoded secret in the file</text>
+  <text x="544" y="138" font-size="12" fill="#0B6E5F">just written: the line and a label, never the value.</text>
+
+  <rect x="532" y="152" width="376" height="64" rx="8" fill="#E6F4F1" stroke="#0E9384" stroke-width="1"/>
+  <text x="544" y="172" font-size="13" font-weight="700" fill="#1B2A4A">capture<tspan font-size="11" font-weight="400" fill="#8A8F98">   · after a subagent</tspan></text>
+  <text x="544" y="190" font-size="12" fill="#0B6E5F">Saves the output to a file, so it</text>
+  <text x="544" y="206" font-size="12" fill="#0B6E5F">survives the chat being compacted.</text>
+
+</svg>
