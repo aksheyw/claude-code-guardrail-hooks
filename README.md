@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🔧 Claude Code Guardrail Hooks: block the mistake at the tool call
+# 🔧 Claude Code Guardrail Hooks: catch the mistake at the tool call
 
-### Four small scripts that stop a bad move the moment it happens, instead of asking the model to behave.
+### Four small scripts, instead of a rule asking the model to behave. Two block a bad move before it lands. Two flag or save what a block does not cover.
 
 ![requires](https://img.shields.io/badge/requires-Claude%20Code-D97757) ![hooks](https://img.shields.io/badge/hooks-4-0E9384) ![tests](https://img.shields.io/badge/tests-53%20passing-1B2A4A) ![license](https://img.shields.io/badge/license-MIT-green)
 

@@ -5,7 +5,7 @@
 
   <!-- BEFORE column: PreToolUse, can block -->
   <rect x="40" y="48" width="272" height="176" rx="10" fill="#F5F6F7" stroke="#B9BEC6" stroke-width="1.5"/>
-  <text x="56" y="72" font-size="12" font-weight="700" fill="#B42318">BEFORE · PreToolUse — CAN BLOCK</text>
+  <text x="56" y="72" font-size="12" font-weight="700" fill="#B42318">BEFORE · PreToolUse · CAN BLOCK</text>
 
   <rect x="52" y="84" width="248" height="64" rx="8" fill="#FDF6F5" stroke="#E8D5D2" stroke-width="1"/>
   <text x="64" y="104" font-size="13" font-weight="700" fill="#1B2A4A">pause-guard<tspan font-size="11" font-weight="400" fill="#8A8F98">   · every tool</tspan></text>
@@ -32,7 +32,7 @@
 
   <!-- AFTER column: PostToolUse, observes only -->
   <rect x="520" y="48" width="400" height="176" rx="10" fill="#F5F6F7" stroke="#B9BEC6" stroke-width="1.5"/>
-  <text x="536" y="72" font-size="12" font-weight="700" fill="#0B6E5F">AFTER · PostToolUse — OBSERVES ONLY</text>
+  <text x="536" y="72" font-size="12" font-weight="700" fill="#0B6E5F">AFTER · PostToolUse · OBSERVES ONLY</text>
 
   <rect x="532" y="84" width="376" height="64" rx="8" fill="#E6F4F1" stroke="#0E9384" stroke-width="1"/>
   <text x="544" y="104" font-size="13" font-weight="700" fill="#1B2A4A">secret-scan<tspan font-size="11" font-weight="400" fill="#8A8F98">   · after a Write</tspan></text>
