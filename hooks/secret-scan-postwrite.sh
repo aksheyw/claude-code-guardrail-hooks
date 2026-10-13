@@ -66,6 +66,18 @@ scan(){
   done < <(grep -niEI -e "$pat" -- "$FILE" 2>/dev/null | head -3)
 }
 
+# scanCS LABEL PATTERN: the same as scan() but case-SENSITIVE. An identity number is
+# defined partly by its case (a PAN is upper case), and folding case is what makes the
+# pattern match ordinary hashes and lowercase identifiers.
+scanCS(){
+  local label="$1" pat="$2"
+  while IFS= read -r m; do
+    [ -z "$m" ] && continue
+    local ln="${m%%:*}"
+    add "$label" "$ln"
+  done < <(grep -nEI -e "$pat" -- "$FILE" 2>/dev/null | head -3)
+}
+
 scan "openrouter-key"  'sk-or-v1-[A-Za-z0-9]{20,}'
 scan "anthropic-key"   'sk-ant-[A-Za-z0-9-]{20,}'
 scan "openai-key"      'sk-[A-Za-z0-9]{30,}'
@@ -81,6 +93,18 @@ scan "telegram-token"  '[0-9]{8,12}:[A-Za-z0-9_-]{35,}'
 # caught — the high-confidence prefixed patterns above are what catch real keys in
 # fallback position.
 scan "generic-secret"  '(secret|api[_-]?key|password|access[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'"'`]?[A-Za-z0-9_+/=-]{16,}'
+
+# IDENTITY NUMBERS. The key patterns above match key SHAPES and do not match a tax ID or a
+# bank code, which is how one can reach a commit with a scanner already running.
+# These patterns are for Indian identifiers; adapt them to your country's.
+# The 12-digit rule is KEYWORD-GATED on purpose: a bare 12-digit match fires on order
+# numbers, timestamps and quantities far more often than on a real ID.
+# NOTE the class is [^0-9] and NOT [^0-9\n]. In a POSIX bracket expression a backslash
+# is literal, so on BSD grep (macOS) [^0-9\n] excludes the LETTER n, and a line like
+# "PRAN number: <12 digits>" becomes a silent miss.
+scanCS "indian-pan"    '\b[A-Z]{5}[0-9]{4}[A-Z]\b'
+scanCS "ifsc"          '\b[A-Z]{4}0[A-Z0-9]{6}\b'
+scan   "id-12-digit"   '\b(pran|aadhaar|uan|folio|demat)\b[^0-9]{0,40}\b[0-9]{4}[ -]?[0-9]{4}[ -]?[0-9]{4}\b'
 
 if [ -n "$HITS" ]; then
   MSG="⚠️ SECRET SCAN: possible hardcoded secret(s) in $(basename -- "$FILE"). Move to an env var BEFORE any commit/push (see ~/.claude/rules/security.md). If this is a false positive (placeholder/example), note it explicitly:\n\n${HITS}"

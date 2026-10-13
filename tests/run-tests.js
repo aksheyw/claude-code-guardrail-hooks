@@ -395,6 +395,31 @@ console.log('secret-scan-postwrite.sh');
     assert.ok(out.includes('SECRET SCAN'), 'sanity: it should have flagged');
     assert.ok(!out.includes(KEY), 'the raw secret value must not appear in output');
   });
+
+  // Identity numbers. A secret scanner matches key SHAPES; a tax ID or bank code is
+  // not a key, so it needs its own patterns. All values below are made up.
+  test('ID: flags an Indian PAN-shaped value', () => {
+    assert.ok(writeScan('notes.md', 'Taxpayer PAN: ABCDE1234F\n').includes('[indian-pan]'));
+  });
+  test('ID: ignores a lowercase PAN-shaped string (identity numbers are upper case)', () => {
+    assert.strictEqual(writeScan('notes.md', 'hash abcde1234f\n').trim(), '');
+  });
+  test('ID: flags an IFSC-shaped bank code', () => {
+    assert.ok(writeScan('notes.md', 'Branch IFSC ABCD0123456\n').includes('[ifsc]'));
+  });
+  test('ID: flags a 12-digit ID next to its keyword, with an "n" between them', () => {
+    // "number:" puts the letter n between keyword and digits. A [^0-9\n] class on
+    // BSD grep excludes the LETTER n and silently misses this line.
+    assert.ok(writeScan('notes.md', 'PRAN number: 1234 5678 9012\n').includes('[id-12-digit]'));
+  });
+  test('ID: ignores a bare 12-digit number with no identity keyword', () => {
+    assert.strictEqual(writeScan('data.csv', 'order,123456789012\n').trim(), '');
+  });
+  test('ID: never echoes the identity value into output', () => {
+    const out = writeScan('notes.md', 'Taxpayer PAN: ABCDE1234F\n');
+    assert.ok(out.includes('[indian-pan]'), 'sanity: it should have flagged');
+    assert.ok(!out.includes('ABCDE1234F'), 'the raw value must not appear in output');
+  });
 }
 
 console.log(`\nTOTAL: ${pass} passed, ${fail} failed`);

@@ -4,7 +4,7 @@
 
 ### Four small scripts, instead of a rule asking the model to behave. Two block a bad move before it lands. Two flag or save what a block does not cover.
 
-![requires](https://img.shields.io/badge/requires-Claude%20Code-D97757) ![hooks](https://img.shields.io/badge/hooks-4-0E9384) ![tests](https://img.shields.io/badge/tests-53%20passing-1B2A4A) ![license](https://img.shields.io/badge/license-MIT-green)
+![requires](https://img.shields.io/badge/requires-Claude%20Code-D97757) ![hooks](https://img.shields.io/badge/hooks-4-0E9384) ![tests](https://img.shields.io/badge/tests-59%20passing-1B2A4A) ![license](https://img.shields.io/badge/license-MIT-green)
 
 </div>
 
@@ -25,7 +25,7 @@ A hook fires either just **before** a **tool call** (the model about to write a 
 |------|---------------|--------------|
 | [`pause-guard.js`](hooks/pause-guard.js) | before every tool call | Blocks all tool calls when your latest message asks it to reconsider its reasoning effort ("is medium good enough?", "bump you to high?"), or is a bare halt ("stop", "wait", "hold on"). Forces a text-only reply so you decide before it keeps working. |
 | [`config-protection.js`](hooks/config-protection.js) | before a file write | Blocks edits to an existing linter/formatter config (`.eslintrc*`, `prettier.config.js`, `biome.json`, `ruff.toml`, and the rest). Stops the common reflex of weakening the config to make a check pass instead of fixing the code. Still lets you create one that doesn't exist yet, so scaffolding a fresh repo works. |
-| [`secret-scan-postwrite.sh`](hooks/secret-scan-postwrite.sh) | after a file write | Scans the just-written file for hardcoded secrets (OpenAI, Anthropic and OpenRouter keys, AWS keys, GitHub tokens, Google API keys, private-key blocks, JWTs, Telegram tokens, and generic `secret=`/`password=` assignments) and reports the line number and a label so you can pull the key before you commit. It flags the write, it does not block it, and the matched secret text is discarded, never echoed back. |
+| [`secret-scan-postwrite.sh`](hooks/secret-scan-postwrite.sh) | after a file write | Scans the just-written file for hardcoded secrets (OpenAI, Anthropic and OpenRouter keys, AWS keys, GitHub tokens, Google API keys, private-key blocks, JWTs, Telegram tokens, and generic `secret=`/`password=` assignments), plus identity numbers that key patterns miss (an Indian tax ID (PAN), an Indian bank branch code (IFSC), and a 12-digit ID written next to a word like Aadhaar or PRAN) and reports the line number and a label so you can pull the key before you commit. It flags the write, it does not block it, and the matched secret text is discarded, never echoed back. |
 | [`capture-subagent-output.js`](hooks/capture-subagent-output.js) | after a subagent runs | Saves each substantial output (800 characters or more) from a **subagent** (a separate assistant the main one spins up for a sub-task) to a dated file under `~/.claude/agent-outputs/`, so its research and verdicts don't get lost when the conversation is trimmed to save space. It catches a subagent the main assistant waits for. A subagent sent to run in the background delivers its report later, after this hook has run, so the hook never sees it. For those, say in the subagent's instructions that it must save its own report to a file. |
 
 ## Why these four
@@ -82,7 +82,7 @@ cd claude-code-guardrail-hooks
 node tests/run-tests.js
 ```
 
-Should print `TOTAL: 53 passed, 0 failed`. This runs the hooks in the cloned **repo** directly (unit tests for `pause-guard.js` / `config-protection.js`, which export testable functions; integration tests that pipe real JSON payloads at `capture-subagent-output.js` and `secret-scan-postwrite.sh`, which don't). It confirms the code is sound, not that you've wired the copies in `~/.claude/scripts/hooks/` into `settings.json`.
+Should print `TOTAL: 59 passed, 0 failed`. This runs the hooks in the cloned **repo** directly (unit tests for `pause-guard.js` / `config-protection.js`, which export testable functions; integration tests that pipe real JSON payloads at `capture-subagent-output.js` and `secret-scan-postwrite.sh`, which don't). It confirms the code is sound, not that you've wired the copies in `~/.claude/scripts/hooks/` into `settings.json`.
 
 To confirm a hook is actually wired into a live session: start a fresh Claude Code session, ask something like *"is medium reasoning effort good enough for this task?"*, and the agent should stop and answer in text only, with no tool calls, until you set a level.
 
@@ -109,6 +109,8 @@ To confirm a hook is actually wired into a live session: start a fresh Claude Co
 | pause-guard | `PAUSE_GUARD_TAIL_BYTES` | 1048576 | How much of the transcript tail to read per call |
 | pause-guard | `PAUSE_GUARD_SKIP_ENTRYPOINTS` | unset | Comma-list of entrypoints to never block (e.g. a headless/print mode) |
 | capture-subagent-output | `CAPTURE_HOOK_DISABLED` | unset | Set `1` to disable entirely |
+
+Set these in the environment Claude Code starts with, for example by exporting them in your shell before you launch it. Typing `PAUSE_GUARD_DISABLED=1` in front of a command inside a session does not work: Claude Code starts each hook itself, so the hook never sees that prefix, and a command the hook blocks never runs.
 
 </details>
 
