@@ -339,6 +339,134 @@ console.log('capture-subagent-output.js');
     assert.ok(content.length < huge.length, 'expected the file to be smaller than the raw output');
     fs.rmSync(home, { recursive: true, force: true });
   });
+
+  // Background and auto-mode subagents. Payload shapes below were logged from a live
+  // Claude Code 2.1.296 run: a background Agent call returns only a launch notice; the
+  // report arrives in SubagentHandback's tool_input.message (auto mode) or in
+  // SubagentStop's last_assistant_message (other modes).
+  const REPORT = 'R'.repeat(900);
+  test('BG: captures a SubagentHandback report', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'SubagentHandback', agent_id: 'a1', agent_type: 'general-purpose', tool_input: { message: REPORT }, tool_response: { success: true, message: 'Report delivered to your caller.' } }, home);
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    assert.ok(fs.readFileSync(files[0], 'utf8').includes(REPORT));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: captures a SubagentStop last_assistant_message', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'a2', agent_type: 'Explore', last_assistant_message: REPORT }, home);
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    assert.ok(fs.readFileSync(files[0], 'utf8').includes(REPORT));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: ignores a SubagentStop with no last_assistant_message (it handed back instead)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'a3', agent_type: 'general-purpose' }, home);
+    assert.strictEqual(allFiles(home).length, 0);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: ignores SubagentStop from an internal agent (empty agent_type)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'a4', agent_type: '', last_assistant_message: REPORT }, home);
+    assert.strictEqual(allFiles(home).length, 0);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: ignores a background launch notice (status async_launched)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'x' }, tool_response: { isAsync: true, status: 'async_launched', agentId: 'a5', prompt: 'p'.repeat(900), content: [{ type: 'text', text: 'n'.repeat(900) }] } }, home);
+    assert.strictEqual(allFiles(home).length, 0);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: the same agent seen by Agent and by SubagentStop is saved once', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'a6', agent_type: 'Explore', last_assistant_message: REPORT }, home);
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'Explore' }, tool_response: { status: 'completed', agentId: 'a6', content: [{ type: 'text', text: REPORT }] } }, home);
+    const reports = allFiles(home).filter((f) => f.endsWith('.md'));
+    assert.strictEqual(reports.length, 1, 'expected exactly one saved report');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: the Agent path still reminds the main session when SubagentStop saved it first', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'a9', agent_type: 'Explore', last_assistant_message: REPORT }, home);
+    const out = runCapture({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'Explore' }, tool_response: { status: 'completed', agentId: 'a9', content: [{ type: 'text', text: REPORT }] } }, home);
+    assert.ok(out.includes('capture-discipline'), 'the main session should still get the reminder');
+    assert.strictEqual(allFiles(home).filter((f) => f.endsWith('.md')).length, 1, 'still saved once');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: reads an auto-mode foreground report from handbackReport.text', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'x' }, tool_response: { status: 'completed', agentId: 'b1', handback: 'send', handbackReport: { text: REPORT }, content: [{ type: 'text', text: 'Report delivered.' }] } }, home);
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    assert.ok(fs.readFileSync(files[0], 'utf8').includes(REPORT));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: auto-mode foreground, in the logged order (hand-back, stop, Agent result), saves once and reminds', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'SubagentHandback', agent_id: 'c1', agent_type: 'general-purpose', tool_input: { message: REPORT } }, home);
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'c1', agent_type: 'general-purpose' }, home);
+    const out = runCapture({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'general-purpose' }, tool_response: { status: 'completed', agentId: 'c1', handbackReport: { text: REPORT }, content: [{ type: 'text', text: 'Report delivered.' }] } }, home);
+    assert.ok(out.includes('capture-discipline'), 'the main session should still get the reminder');
+    assert.strictEqual(allFiles(home).filter((f) => f.endsWith('.md')).length, 1, 'saved once');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: SubagentStop after a hand-back saves the hand-back message, not the closing text', () => {
+    // Logged live on 2.1.296: in auto mode SubagentStop can land before the
+    // SubagentHandback hook and claim the agent, and its last_assistant_message is
+    // the subagent's closing text, which need not be the delivered report.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const transcript = path.join(home, 'agent-d1.jsonl');
+    const HANDED = 'H'.repeat(900);
+    const CLOSING = 'C'.repeat(900);
+    fs.writeFileSync(transcript, [
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: CLOSING }] } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: HANDED } }] } },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'd1', agent_type: 'general-purpose', agent_transcript_path: transcript, last_assistant_message: CLOSING }, home);
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'SubagentHandback', agent_id: 'd1', agent_type: 'general-purpose', tool_input: { message: HANDED } }, home);
+    const reports = allFiles(home).filter((f) => f.endsWith('.md'));
+    assert.strictEqual(reports.length, 1, 'saved once');
+    const saved = fs.readFileSync(reports[0], 'utf8');
+    assert.ok(saved.includes(HANDED) && !saved.includes(CLOSING), 'expected the hand-back message');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: SubagentStop with an unreadable transcript falls back to last_assistant_message', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'd2', agent_type: 'Explore', agent_transcript_path: path.join(home, 'missing.jsonl'), last_assistant_message: REPORT }, home);
+    const files = allFiles(home);
+    assert.strictEqual(files.length, 1);
+    assert.ok(fs.readFileSync(files[0], 'utf8').includes(REPORT));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: a failed write releases the agent, so the next event can still save it', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const now = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const day = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
+    const dayDir = path.join(home, '.claude', 'agent-outputs', 'proj', day);
+    fs.mkdirSync(dayDir, { recursive: true });
+    fs.chmodSync(dayDir, 0o500); // the report write fails with EACCES
+    runCapture({ hook_event_name: 'SubagentStop', agent_id: 'e1', agent_type: 'Explore', cwd: '/x/proj', last_assistant_message: REPORT }, home);
+    assert.strictEqual(fs.existsSync(path.join(home, '.claude', '.capture-markers', 'proj', 'e1')), false, 'marker should be released');
+    fs.chmodSync(dayDir, 0o700);
+    runCapture({ hook_event_name: 'PostToolUse', tool_name: 'SubagentHandback', agent_id: 'e1', agent_type: 'Explore', cwd: '/x/proj', tool_input: { message: REPORT } }, home);
+    assert.strictEqual(allFiles(home).filter((f) => f.endsWith('.md')).length, 1, 'the second event saves it');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: prints nothing on SubagentStop (a reminder there would keep the subagent running)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const out = runCapture({ hook_event_name: 'SubagentStop', agent_id: 'a7', agent_type: 'Explore', last_assistant_message: REPORT }, home);
+    assert.strictEqual(out.trim(), '');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  test('BG: prints nothing on SubagentHandback (it runs inside the finishing subagent)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'capture-home-'));
+    const out = runCapture({ hook_event_name: 'PostToolUse', tool_name: 'SubagentHandback', agent_id: 'a8', agent_type: 'x', tool_input: { message: REPORT } }, home);
+    assert.strictEqual(out.trim(), '');
+    fs.rmSync(home, { recursive: true, force: true });
+  });
 }
 
 // ── secret-scan-postwrite.sh (integration) ─────────────────────────────────

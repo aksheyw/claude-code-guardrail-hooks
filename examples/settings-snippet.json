@@ -35,7 +35,17 @@
         ]
       },
       {
-        "matcher": "Task|Agent",
+        "matcher": "Task|Agent|SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/absolute/path/to/hooks/capture-subagent-output.js\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
         "hooks": [
           {
             "type": "command",

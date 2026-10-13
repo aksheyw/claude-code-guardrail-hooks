@@ -1,15 +1,25 @@
 #!/usr/bin/env node
 /**
- * capture-subagent-output.js — global PostToolUse hook.
+ * capture-subagent-output.js: global hook that saves subagent reports to files.
  *
- * Auto-saves a SUBSTANTIAL final output from a foreground subagent to a file, so
- * its research/verdicts are not stranded in chat and lost on compaction.
- * A background subagent's report arrives after this hook has run, so it is NOT
- * captured here: brief a background subagent to write its own report to a file.
+ * Auto-saves a SUBSTANTIAL subagent report to a file, so its research/verdicts are
+ * not stranded in chat and lost on compaction. A report can arrive three ways, so
+ * wire this script to all three (see examples/settings-snippet.json):
+ *   - PostToolUse on Task/Agent: a foreground subagent's result (tool_response).
+ *     A background launch returns only a notice here (status async_launched); skipped.
+ *   - PostToolUse on SubagentHandback: in auto mode a subagent delivers its report
+ *     through this tool (tool_input.message), foreground or background.
+ *   - SubagentStop: outside auto mode, the report is last_assistant_message. After
+ *     a hand-back that field holds only closing text, so if the subagent's
+ *     transcript shows a SubagentHandback call, its message is saved instead.
+ * The same agent can reach two of these paths, so each agent id is saved once.
  * Enforcement backstop for ~/.claude/rules/capture-discipline.md.
  *
  * Writes to: ~/.claude/agent-outputs/<project>/<YYYY-MM-DD>/<HHMMSS>-<label>.md
- * Emits additionalContext reminding the agent to fold key findings into a durable doc.
+ * On the Task/Agent path only, emits additionalContext reminding the main session to
+ * fold key findings into a durable doc. It prints NOTHING on the other two paths:
+ * there the hook runs as the subagent finishes, and on SubagentStop any
+ * additionalContext would keep the subagent running.
  * FAILS OPEN (never blocks a tool). Kill switch: CAPTURE_HOOK_DISABLED=1.
  */
 const fs = require('fs');
@@ -25,6 +35,31 @@ const MAX_CAPTURE_CHARS = 2 * 1024 * 1024; // cap written output (~2MB) so a hug
 // payload over the cap is truncated, fails JSON.parse, and we exit 0 (fail open,
 // no capture) — acceptable, since capture never blocks a tool.
 const MAX_STDIN = 16 * 1024 * 1024;
+const MAX_TRANSCRIPT = 32 * 1024 * 1024; // skip reading a subagent transcript past this
+
+// The last SubagentHandback message in a subagent's transcript (JSONL), or ''.
+// SubagentStop and PostToolUse(SubagentHandback) can land in either order, and
+// whichever lands first claims the agent. Reading the hand-back here means
+// SubagentStop saves the delivered report even when it lands first. If the
+// transcript cannot be read, SubagentStop falls back to last_assistant_message.
+function handbackFromTranscript(p) {
+  if (typeof p !== 'string' || !p) return '';
+  try {
+    if (fs.statSync(p).size > MAX_TRANSCRIPT) return '';
+    const lines = fs.readFileSync(p, 'utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('SubagentHandback')) continue;
+      let entry;
+      try { entry = JSON.parse(lines[i]); } catch { continue; }
+      const blocks = entry && entry.message && entry.message.content;
+      if (!Array.isArray(blocks)) continue;
+      const calls = blocks.filter((b) => b && b.type === 'tool_use' && b.name === 'SubagentHandback'
+        && b.input && typeof b.input.message === 'string');
+      if (calls.length) return calls[calls.length - 1].input.message;
+    }
+  } catch { /* unreadable transcript: fall back to last_assistant_message */ }
+  return '';
+}
 
 // pull plain text out of the many shapes a tool_response / message can take
 function extractText(v, depth = 0) {
@@ -48,16 +83,61 @@ function slug(s, n = 40) {
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
+// The reminder goes to the main session, so only the Task/Agent path sends it.
+function remindAndExit(where, chars) {
+  const out = {
+    hookSpecificOutput: {
+      hookEventName: 'PostToolUse',
+      additionalContext:
+        `📝 capture-discipline: subagent output auto-saved ${where} ` +
+        `(${chars} chars). Per ~/.claude/rules/capture-discipline.md, fold its key findings ` +
+        `into a durable project doc — do not leave them only in chat.`,
+    },
+  };
+  process.stdout.write(JSON.stringify(out));
+  process.exit(0);
+}
+
 function runCapture(raw) {
   try {
     if (!raw) process.exit(0);
     let payload;
     try { payload = JSON.parse(raw); } catch { process.exit(0); }
 
+    const event = payload.hook_event_name || 'PostToolUse';
     const tool = payload.tool_name || payload.toolName || '';
-    if (!/^(Task|Agent)$/i.test(tool)) process.exit(0); // only subagent tools
+    const input = payload.tool_input || payload.toolInput || {};
+    let text = '';
+    let labelSource = '';
+    let agentId = '';
+    let remind = false;
 
-    let text = extractText(payload.tool_response ?? payload.toolResponse ?? payload.response ?? '');
+    if (event === 'SubagentStop') {
+      // An empty agent_type is one of Claude Code's own internal agents; skip it.
+      if (!payload.agent_type) process.exit(0);
+      text = handbackFromTranscript(payload.agent_transcript_path)
+        || (typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : '');
+      labelSource = payload.agent_type;
+      agentId = payload.agent_id || '';
+    } else if (/^SubagentHandback$/i.test(tool)) {
+      text = typeof input.message === 'string' ? input.message : '';
+      labelSource = payload.agent_type || 'subagent';
+      agentId = payload.agent_id || '';
+    } else if (/^(Task|Agent)$/i.test(tool)) {
+      const resp = payload.tool_response ?? payload.toolResponse ?? payload.response ?? '';
+      if (resp && typeof resp === 'object' && (resp.status === 'async_launched' || resp.isAsync === true)) {
+        process.exit(0); // a background launch notice, not a report
+      }
+      // In auto mode a foreground result carries the report in handbackReport.text
+      // (observed on Claude Code 2.1.296) and only a short note in content.
+      const hb = resp && typeof resp === 'object' && resp.handbackReport;
+      text = (hb && typeof hb.text === 'string' && hb.text) || extractText(resp);
+      labelSource = input.subagent_type || input.description || tool;
+      agentId = (resp && typeof resp === 'object' && resp.agentId) || '';
+      remind = true;
+    } else {
+      process.exit(0); // not a subagent event
+    }
     if (!text || text.length < MIN_CHARS) process.exit(0);
     let truncatedNote = '';
     if (text.length > MAX_CAPTURE_CHARS) {
@@ -67,8 +147,7 @@ function runCapture(raw) {
       text = text.slice(0, MAX_CAPTURE_CHARS);
     }
 
-    const input = payload.tool_input || payload.toolInput || {};
-    const label = slug(input.subagent_type || input.description || tool);
+    const label = slug(labelSource);
 
     const cwd = payload.cwd || process.cwd() || os.homedir();
     const project = slug(path.basename(cwd), 60);
@@ -80,9 +159,33 @@ function runCapture(raw) {
     const dir = path.join(os.homedir(), '.claude', 'agent-outputs', project, date);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
+    // Save each agent once. A foreground subagent reaches the Task/Agent path and also
+    // SubagentStop (outside auto mode) or SubagentHandback (in auto mode). An exclusive
+    // create of a per-agent marker is race-safe: whichever event lands first wins, the
+    // other sees EEXIST and exits.
+    // ponytail: one empty marker file per subagent, never pruned. Prune markers older
+    // than a day if a project's marker directory passes ~100k files.
+    let marker = '';
+    if (agentId) {
+      const markerDir = path.join(os.homedir(), '.claude', '.capture-markers', project);
+      fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
+      try {
+        fs.writeFileSync(path.join(markerDir, slug(agentId, 80)), '', { flag: 'wx', mode: 0o600 });
+        marker = path.join(markerDir, slug(agentId, 80));
+      } catch (err) {
+        if (err && err.code === 'EEXIST') {
+          // Another event already saved this agent. The Task/Agent path still owes the
+          // main session its reminder, because the other two paths print nothing.
+          if (remind) remindAndExit(`under ${dir}`, text.length);
+          process.exit(0);
+        }
+        throw err;
+      }
+    }
+
     const header =
       `# Subagent output (auto-captured)\n\n` +
-      `- tool: ${tool}\n- label: ${input.subagent_type || input.description || '(none)'}\n` +
+      `- source: ${event === 'SubagentStop' ? 'SubagentStop' : tool}\n- label: ${labelSource || '(none)'}\n` +
       `- project: ${project}\n- captured: ${now.toISOString()}\n- cwd: ${cwd}\n\n` +
       `> Auto-saved by capture-subagent-output.js so this is never lost to chat compaction.\n> Fold the key findings into a durable project doc (tasks/… or the wiki).\n\n---\n\n`;
     const body = header + text + truncatedNote;
@@ -104,21 +207,15 @@ function runCapture(raw) {
         break;
       } catch (err) {
         if (err && err.code === 'EEXIST' && n < 10000) continue;
+        // Nothing was saved, so release the agent: the other event may still save it,
+        // and the Task/Agent path must not claim a save that did not happen.
+        if (marker) { try { fs.unlinkSync(marker); } catch { /* fail open */ } }
         throw err; // outer catch fails open
       }
     }
 
-    const out = {
-      hookSpecificOutput: {
-        hookEventName: 'PostToolUse',
-        additionalContext:
-          `📝 capture-discipline: subagent output auto-saved to ${file} ` +
-          `(${text.length} chars). Per ~/.claude/rules/capture-discipline.md, fold its key findings ` +
-          `into a durable project doc — do not leave them only in chat.`,
-      },
-    };
-    process.stdout.write(JSON.stringify(out));
-    process.exit(0);
+    if (!remind) process.exit(0); // print nothing on SubagentStop / SubagentHandback
+    remindAndExit(`to ${file}`, text.length);
   } catch (e) {
     // fail open — never block a tool because capture had a problem
     process.exit(0);

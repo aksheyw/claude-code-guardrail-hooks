@@ -30,9 +30,9 @@
   <path d="M486 136 L516 136" stroke="#8A8F98" stroke-width="2" fill="none"/>
   <path d="M516 136 l-8 -5 v10 z" fill="#8A8F98"/>
 
-  <!-- AFTER column: PostToolUse, observes only -->
+  <!-- AFTER column: PostToolUse / SubagentStop, observes only -->
   <rect x="520" y="48" width="400" height="176" rx="10" fill="#F5F6F7" stroke="#B9BEC6" stroke-width="1.5"/>
-  <text x="536" y="72" font-size="12" font-weight="700" fill="#0B6E5F">AFTER · PostToolUse · OBSERVES ONLY</text>
+  <text x="536" y="72" font-size="12" font-weight="700" fill="#0B6E5F">AFTER · PostToolUse / SubagentStop · OBSERVES ONLY</text>
 
   <rect x="532" y="84" width="376" height="64" rx="8" fill="#E6F4F1" stroke="#0E9384" stroke-width="1"/>
   <text x="544" y="104" font-size="13" font-weight="700" fill="#1B2A4A">secret-scan<tspan font-size="11" font-weight="400" fill="#8A8F98">   · after a Write</tspan></text>
@@ -40,7 +40,7 @@
   <text x="544" y="138" font-size="12" fill="#0B6E5F">just written: the line and a label, never the value.</text>
 
   <rect x="532" y="152" width="376" height="64" rx="8" fill="#E6F4F1" stroke="#0E9384" stroke-width="1"/>
-  <text x="544" y="172" font-size="13" font-weight="700" fill="#1B2A4A">capture<tspan font-size="11" font-weight="400" fill="#8A8F98">   · after a subagent it waited for</tspan></text>
+  <text x="544" y="172" font-size="13" font-weight="700" fill="#1B2A4A">capture<tspan font-size="11" font-weight="400" fill="#8A8F98">   · when a subagent reports</tspan></text>
   <text x="544" y="190" font-size="12" fill="#0B6E5F">Saves the output to a file, so it</text>
   <text x="544" y="206" font-size="12" fill="#0B6E5F">survives the chat being compacted.</text>
 
