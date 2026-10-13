@@ -2,8 +2,10 @@
 /**
  * capture-subagent-output.js — global PostToolUse hook.
  *
- * Auto-saves every SUBSTANTIAL subagent final output to a file, so subagent
- * research/verdicts are never stranded in chat and lost on compaction.
+ * Auto-saves a SUBSTANTIAL final output from a foreground subagent to a file, so
+ * its research/verdicts are not stranded in chat and lost on compaction.
+ * A background subagent's report arrives after this hook has run, so it is NOT
+ * captured here: brief a background subagent to write its own report to a file.
  * Enforcement backstop for ~/.claude/rules/capture-discipline.md.
  *
  * Writes to: ~/.claude/agent-outputs/<project>/<YYYY-MM-DD>/<HHMMSS>-<label>.md
