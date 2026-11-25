@@ -37,6 +37,14 @@
  *     (a level word / "your effort" / "reasoning effort"), never bare "effort",
  *     so "the effort tracker" / "change the effort field" do NOT fire.
  *
+ * 2026-11-19 FIX. A trial found 16 of 28 real fires in 30 days were wrong, and all
+ *   10 ordinary product-spec lines tested were blocked ("Users must wait 3 days...").
+ *   The halt check now needs the halt SHAPE (word opens a clause or is addressed to
+ *   "you", and is followed by nothing, punctuation, or a short whitelist),
+ *   quoted/pasted text is ignored, work-sense effort (story/Jira/team/"effort on X")
+ *   is skipped, and "I've set effort to high" counts as a go-ahead.
+ *   Tests: tests/pause-guard.test.js. What changed and its limits: CHANGELOG.md.
+ *
  * KILL SWITCH  PAUSE_GUARD_DISABLED=1|true|yes  => exit 0 immediately.
  * TUNABLES     PAUSE_GUARD_EFFORT_MAXLEN (1000), PAUSE_GUARD_HARD_MAXLEN (280),
  *              PAUSE_GUARD_TAIL_BYTES (1048576)
@@ -51,11 +59,6 @@ const MAX_STDIN = 1024 * 1024;
 const DEFAULT_EFFORT_MAXLEN = 1000;
 const DEFAULT_HARD_MAXLEN = 280;
 const DEFAULT_TAIL_BYTES = 1024 * 1024;
-
-// Leading delimiter for interjections: start, whitespace, or sentence punctuation.
-// Intentionally EXCLUDES hyphen so hyphenated compounds ("hard-pause", "non-stop",
-// "auto-pause") do NOT match when the feature itself is being discussed.
-const LEAD = "(?:^|[\\s,;.!?\"'(])";
 
 // ── Explicit go-anyway overrides (checked first; win over any block) ──────────
 // The negative lookbehind on the first pattern stops a NEGATED go-word from
@@ -101,52 +104,111 @@ const EFFORT = [
   /\beffort\b[^.?!]{0,10}\btoo (?:low|high)\b/,
 ];
 
+// ── Work-sense effort (2026-11-19 fix) ───────────────────────────────────────
+// The trial found PM lines blocked as effort questions: "Set effort to high for the
+// API story in Jira", "Is medium priority enough for this bug?", "Should we raise the
+// effort on onboarding next quarter?". Only the GENERIC effort patterns below are
+// subject to these filters; the STRONG ones ("your effort", "reasoning effort",
+// "bump you to high", "too low effort") always count.
+const STRONG_EFFORT = new Set([0, 1, 4, 8, 9, 10]); // indexes into EFFORT
+const WORK_CONTEXT =
+  /\b(?:stor(?:y|ies)|tickets?|jira|epics?|sprints?|estimates?|estimation|points|quarter|roadmap|backlog|okrs?|headcount|squad|team)\b/;
+const EFFORT_TARGET = /\beffort\s+(?:on|into|towards?|across|behind)\s+(?!this\b|that\b|it\b|these\b|those\b)/;
+// "medium priority" / "high severity" are not effort levels; blank them out first.
+const LEVEL_NOUN =
+  /\b(?:medium|med|max|maximum|high|low)[\s-]+(?:priority|severity|risk|size|sized|impact|confidence|tier|plan|term|scope|complexity|budget|quality|volume|traffic|length|income|value)\b/g;
+// A statement that the level is ALREADY set is a go-ahead, not a pending decision.
+const EFFORT_ALREADY_SET =
+  /\bi(?:['’]?ve| have| just| already|['’]?ve just|['’]?ve already)\s+(?:set|raised|lowered|changed|switched|bumped|dropped|put|moved|turned)\b[^.?!]{0,20}\b(?:effort|you|u)\b|\bi\s+(?:raised|lowered|changed|switched|bumped|dropped|moved|turned)\b[^.?!]{0,20}\b(?:effort|you|u)\b/;
+
+function effortDecision(lower) {
+  if (EFFORT_ALREADY_SET.test(lower)) return false;
+  const t = lower.replace(LEVEL_NOUN, ' ');
+  const workSense = WORK_CONTEXT.test(t) || EFFORT_TARGET.test(t);
+  return EFFORT.some((r, i) => r.test(t) && (STRONG_EFFORT.has(i) || !workSense));
+}
+
+// ── Quoted text is not an instruction (2026-11-19 fix) ───────────────────────
+// Replay showed pasted assistant text ("> ... I lifted the pause ...") firing the
+// guard. Drop blockquote lines, HTML comments, and quoted spans before matching.
+// Linear-time removal of <!-- ... --> comments. Same result as
+// text.replace(/<!--[\s\S]*?-->/g, ' '), but that regex rescans to the end of the
+// text from every unclosed "<!--", which is quadratic on a long message.
+function stripComments(text) {
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const open = text.indexOf('<!--', i);
+    if (open === -1) break;
+    const close = text.indexOf('-->', open + 4);
+    if (close === -1) break; // unclosed: no later "<!--" can close either
+    out += text.slice(i, open) + ' ';
+    i = close + 3;
+  }
+  return out + text.slice(i);
+}
+
+function stripQuoted(text) {
+  return stripComments(text)
+    .split('\n')
+    .filter((l) => !/^\s*>/.test(l))
+    .join('\n')
+    .replace(/"[^"\n]{0,200}"/g, ' ')
+    .replace(/“[^”\n]{0,200}”/g, ' ')
+    .replace(/`[^`\n]{0,200}`/g, ' ')
+    .replace(/(^|[\s(])['‘][^'’\n]{1,80}['’](?=$|[\s.,;:!?)])/g, '$1 ');
+}
+
 // ── SLIM hard-pause interjections (SECONDARY) ─────────────────────────────────
+// 2026-11-19 rewrite. The old version matched the halt word ANYWHERE minus a list of
+// exceptions, so every descriptive sentence fired ("Users must wait 3 days", "the
+// session should stop", "hits stop mid-upload", "pause the newsletter"). A halt aimed
+// at the assistant has a shape; the new version requires that shape:
+//   1. POSITION: the word opens a clause (message start, or after . ! ? ; : , newline,
+//      a dash, or "-->"), optionally after up to three discourse words ("yes, but",
+//      "no", "ok", "please", "just"...). OR it is addressed: "you need to / you
+//      should / can you ... stop".
+//   2. WHAT FOLLOWS: end of text, punctuation, or a short whitelist ("here", "now",
+//      "for now", "a sec", "what you're doing"; for wait/hold on also a question word
+//      or pronoun: "wait why...", "wait r u..."). An object ("stop them", "pause the
+//      workflow", "pause for HIGH", "wait time", "stop and move on") does not count.
+const MARKERS =
+  "(?:yes|yeah|yep|ya|no|nope|nah|ok|okay|oh|hey|hmm+|but|so|and|then|please|pls|plz|just|now|actually|lets|let['’]?s|wait|stop|pause|hold on|hang on)";
+const CLAUSE_START = `(?:^|[.!?;:,\\n]|\\s[-–—]+|-->)\\s*(?:${MARKERS}[\\s,.!]+){0,3}`;
+const ADDRESSED =
+  "(?:\\b(?:you|u)\\s+(?:really\\s+)?(?:need|have|got|must|should|gotta)\\s+(?:to\\s+)?|\\b(?:can|could|would|will)\\s+(?:you|u)\\s+(?:please\\s+|pls\\s+|just\\s+)?)";
+const TAIL_COMMON =
+  "here|now|right now|right there|there|please|pls|plz|immediately|asap|for now|for a (?:sec|second|moment|minute|min|bit)|a (?:sec|second|moment|minute|min)|everything|all work|what you(?:['’]re| are| r)? doing|and wait|and listen|and let me|and check with me|and ask me";
+const TAIL_QUESTION =
+  "why|what|how|where|who|when|is|are|r|u|you|did|do|does|was|were|i|we|that|that['’]?s|this|it['’]?s|isn['’]?t|shouldn['’]?t|didn['’]?t|don['’]?t|before|actually|no|hold|stop|so|hmm+|let|up";
+const END = '(?=\\s*(?:$|[.,;:!?…)]))';
+
+function haltRe(word, tail) {
+  const after = `(?:${END}|\\s+(?:${tail})\\b)`;
+  return new RegExp(`(?:${CLAUSE_START}|${ADDRESSED})${word}${after}`);
+}
+const HALT_STOP = haltRe('(?:just\\s+)?stop', TAIL_COMMON);
+const HALT_PAUSE = haltRe('pause', TAIL_COMMON);
+const HALT_WAIT = haltRe('wait', `${TAIL_COMMON}|${TAIL_QUESTION}`);
+const HALT_HOLD = haltRe('(?:hold|hang)\\s+(?:on|up)', `${TAIL_COMMON}|${TAIL_QUESTION}`);
+// UI vocabulary: "play, pause, stop", "play/pause".
+const MEDIA_CONTROLS = /\bplay\b[^.?!\n]{0,30}\b(?:pause|stop)\b|\b(?:pause|stop)\b[^.?!\n]{0,30}\bplay\b/;
+const NOT_A_HALT = /\bwait\s+(?:is|was)\s+(?:over|worth)\b/;
+
 function hardPause(lower) {
-  // "pause" — but not a UI/feature noun, not "play/pause", and not a TOPIC mention
-  // ("where to pause", "pause point", "pause-guard") rather than a command.
-  if (
-    // object/compound noun: "pause button", "pause-guard", "pause point", "pause/resume"
-    !/\bpause[-\s/]+(?:button|feature|icon|screen|menu|modal|state|mode|toggle|timer|control|functionality|handler|logic|option|element|component|page|view|method|function|point|guard|trigger|behaviou?r|when|if|resume|and resume)/.test(lower) &&
-    !/\bplay\s*\/?\s*pause\b/.test(lower) &&
-    !/\bto pause\b/.test(lower) && // infinitive: "where/when to pause", "tell it to pause" = topic
-    !/\b(?:where|when|how|whether|should|if|would|could|will|does|do)\b[^.?!]{0,12}\bpause\b/.test(lower) && // interrogative framing = discussing pausing
-    new RegExp(LEAD + 'pause\\b').test(lower)
-  ) {
-    return true;
-  }
-  // "hold on" / "hold up" — but not "hold on to <something>" (= retain)
-  if (/\bhold (?:on|up)\b(?!\s+to\b)/.test(lower)) return true;
-  // standalone "stop" — but not "stop the server / build / process ...", not a
-  // can't-stop idiom ("I cannot stop thinking about this bug"), and not "stop
-  // <gerund>" ("stop guessing", "stop being lazy") which is a topic, not a halt.
-  if (
-    !/\bstop(?:p?ing|p?ed)?\s+(?:the|this|that|it|all|my|your|our|a |an |server|build|process|container|loop|dev|script|job|run|test|service|workflow|deploy|task|recording|sharing|watching|polling)\b/.test(lower) &&
-    !/\b(?:cannot|can['’]?t|could\s?n['’]?t|will\s?not|won['’]?t|would\s?n['’]?t)\s+stop\b/.test(lower) &&
-    !/\bstop\s+\w+ing\b/.test(lower) &&
-    new RegExp(LEAD + '(?:just |please )?stop\\b').test(lower)
-  ) {
-    return true;
-  }
-  // standalone "wait" — but not "wait for / until / on ...", not "the wait" and
-  // not "wait is/was over" (a noun, not a command).
-  if (
-    !/\bwait\s+(?:for|until|till|on|while|and see|is|was|will|would|has|had|seems)\b/.test(lower) &&
-    !/\bthe\s+wait\b/.test(lower) &&
-    new RegExp(LEAD + 'wait\\b').test(lower)
-  ) {
-    return true;
-  }
-  return false;
+  if (MEDIA_CONTROLS.test(lower) || NOT_A_HALT.test(lower)) return false;
+  return [HALT_STOP, HALT_PAUSE, HALT_WAIT, HALT_HOLD].some((r) => r.test(lower));
 }
 
 // Returns 'effort' | 'hard' | null
 function classify(text, limits) {
-  const t = (text || '').trim();
+  const raw = (text || '').trim();
+  if (!raw) return null;
+  const t = stripQuoted(raw).trim();
   if (!t) return null;
   const lower = t.toLowerCase();
   if (NEGATE.some((r) => r.test(lower))) return null; // explicit go-anyway wins
-  if (t.length <= limits.effort && EFFORT.some((r) => r.test(lower))) return 'effort';
+  if (t.length <= limits.effort && effortDecision(lower)) return 'effort';
   if (t.length <= limits.hard && hardPause(lower)) return 'hard';
   return null;
 }
@@ -282,7 +344,7 @@ function decide(input) {
   return { exitCode: 0 };
 }
 
-module.exports = { classify, hardPause, latestUserMessage, decide, EFFORT, NEGATE };
+module.exports = { classify, hardPause, effortDecision, stripQuoted, latestUserMessage, decide, EFFORT, NEGATE };
 
 // ── Stdin entrypoint ─────────────────────────────────────────────────────────
 if (require.main === module) {
