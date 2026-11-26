@@ -28,3 +28,5 @@ jobs:
         run: jq --version
       - name: Run the hook test suite
         run: node tests/run-tests.js
+      - name: Run the pause-guard case suite
+        run: node tests/pause-guard.test.js
